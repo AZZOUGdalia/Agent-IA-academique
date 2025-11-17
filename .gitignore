@@ -1,0 +1,32 @@
+# === VS Code & Editor ===
+.vscode/
+*.code-workspace
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv/
+env/
+venv/
+
+# === Node / Web stuff ===
+node_modules/
+dist/
+*.js.map
+
+# === OS system ===
+.DS_Store
+Thumbs.db
+
+# === Build / Logs ===
+logs/
+*.log
+*.sqlite
+*.db
+
+# === OneDrive temp files ===
+~$*
+
