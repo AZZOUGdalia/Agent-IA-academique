@@ -162,10 +162,14 @@ def _call_ollama_chat(messages: List[dict]) -> str:
 def rag_query(question: str, k: int = 5) -> str:
     """RAG pipeline: retrieve chunks, call LLM with context, return answer."""
     collection = load_vector_index()
+        # on embed la question avec notre SentenceTransformer
+    q_emb = embed_texts([question])  # -> liste de 1 vecteur
+
     results = collection.query(
-        query_texts=[question],
+        query_embeddings=q_emb,
         n_results=k
     )
+
 
     docs = results["documents"][0]
     metas = results["metadatas"][0]
@@ -202,10 +206,12 @@ def rag_query_with_history(question: str, history: List[dict], k: int = 5) -> st
     history = list of {"role": "user"/"assistant", "content": "..."}
     """
     collection = load_vector_index()
+        q_emb = embed_texts([question])
     results = collection.query(
-        query_texts=[question],
+        query_embeddings=q_emb,
         n_results=k
     )
+
 
     docs = results["documents"][0]
     metas = results["metadatas"][0]
