@@ -1,12 +1,15 @@
-from sentence_transformers import SentenceTransformer
+# build_index.py
 
-# modèle d'embedding gratuit et local
-_embedder = SentenceTransformer("all-MiniLM-L6-v2")
+from rag_core import load_pdfs, build_vector_index, DATA_DIR
 
-def embed(texts):
-    """
-    texts : liste de strings
-    return : liste de vecteurs (list[list[float]])
-    """
-    embeddings = _embedder.encode(texts, convert_to_numpy=True)
-    return embeddings.tolist()
+def main():
+    print(f"[BUILD] Loading PDFs from: {DATA_DIR}")
+    docs = load_pdfs(DATA_DIR)
+    print(f"[BUILD] Loaded {len(docs)} documents.")
+    if not docs:
+        print("[BUILD] No documents found. Check that your PDFs are in the 'data_raw' folder.")
+        return
+    build_vector_index(docs)
+
+if __name__ == "__main__":
+    main()
