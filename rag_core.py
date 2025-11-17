@@ -1,24 +1,28 @@
-# rag_core.py
+# rag_core.py - version sans OpenAI, avec embeddings locaux + Ollama
 
 import os
 import glob
 from typing import List, Tuple
-from dotenv import load_dotenv
+
 from pypdf import PdfReader
 import chromadb
 from chromadb.config import Settings
-from openai import OpenAI
 
-# Configuration
+import requests
+from sentence_transformers import SentenceTransformer
+
+# === Config générale ===
 DATA_DIR = "data_raw"
 VECTOR_DIR = "vectorstore"
 COLLECTION_NAME = "rl_docs"
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-CHAT_MODEL = "gpt-4o-mini"
+# === Config embeddings (gratuit, local) ===
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+_embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-load_dotenv
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# === Config Ollama (LLM gratuit, local) ===
+OLLAMA_URL = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = "llama3"  # à récupérer avec: ollama pull llama3
 
 
 def load_pdfs(data_dir: str = DATA_DIR) -> List[Tuple[str, str]]:
@@ -58,7 +62,11 @@ def simple_chunk(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[
     return chunks
 
 
-def get_chroma_collection(persist_dir: str = VECTOR_DIR, collection_name: str = COLLECTION_NAME):
+def get_chroma_collection(
+    persist_dir: str = VECTOR_DIR,
+    collection_name: str = COLLECTION_NAME
+):
+    """Create or load a persistent Chroma collection."""
     client_chroma = chromadb.PersistentClient(
         path=persist_dir,
         settings=Settings(anonymized_telemetry=False)
@@ -67,20 +75,24 @@ def get_chroma_collection(persist_dir: str = VECTOR_DIR, collection_name: str = 
     return collection
 
 
-def embed_texts(texts: List[str]) -> List[List[float]]:
-    """Use OpenAI embeddings."""
-    response = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=texts
-    )
-    return [d.embedding for d in response.data]
+# ============= Embeddings (LOCAL, GRATUIT) =============
 
+def embed_texts(texts: List[str]) -> List[List[float]]:
+    """
+    Embeddings locaux avec SentenceTransformers.
+    Retourne une liste de vecteurs de floats.
+    """
+    embeddings = _embedder.encode(texts, convert_to_numpy=True)
+    return embeddings.tolist()
+
+
+# ============= Construction de l'index vecteur =============
 
 def build_vector_index(docs: List[Tuple[str, str]]):
     """Build or rebuild the vector index from docs."""
     collection = get_chroma_collection()
 
-    # Safe clear of existing data (compatible with new chromadb)
+    # Clear existing data
     try:
         existing = collection.get()
         ids = existing.get("ids", [])
@@ -115,13 +127,37 @@ def build_vector_index(docs: List[Tuple[str, str]]):
     print("[INDEX] Done.")
     return collection
 
-    
-
 
 def load_vector_index():
     """Load existing Chroma collection."""
     return get_chroma_collection()
 
+
+# ============= LLM via OLLAMA (LOCAL, GRATUIT) =============
+
+def _call_ollama_chat(messages: List[dict]) -> str:
+    """
+    Appelle le modèle local via Ollama (format style ChatGPT).
+    messages = [{"role": "system"/"user"/"assistant", "content": "..."}]
+    """
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,  # plus simple à gérer que le streaming
+    }
+    resp = requests.post(OLLAMA_URL, json=payload, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Format standard d'Ollama: { "message": { "role": "...", "content": "..." }, ... }
+    if "message" in data and "content" in data["message"]:
+        return data["message"]["content"]
+
+    # fallback si jamais la structure change
+    return str(data)
+
+
+# ============= RAG simple =============
 
 def rag_query(question: str, k: int = 5) -> str:
     """RAG pipeline: retrieve chunks, call LLM with context, return answer."""
@@ -152,14 +188,12 @@ def rag_query(question: str, k: int = 5) -> str:
         "Answer in English. If you need equations, describe them in plain text."
     )
 
-    completion = client.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-    return completion.choices[0].message.content
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    return _call_ollama_chat(messages)
 
 
 def rag_query_with_history(question: str, history: List[dict], k: int = 5) -> str:
@@ -197,8 +231,4 @@ def rag_query_with_history(question: str, history: List[dict], k: int = 5) -> st
         }
     )
 
-    completion = client.chat.completions.create(
-        model=CHAT_MODEL,
-        messages=messages,
-    )
-    return completion.choices[0].message.content
+    return _call_ollama_chat(messages)
