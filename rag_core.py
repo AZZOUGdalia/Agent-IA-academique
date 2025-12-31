@@ -22,7 +22,7 @@ _embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
 # === Config Ollama (LLM gratuit, local) ===
 OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "llama3"  # à récupérer avec: ollama pull llama3
+OLLAMA_MODEL = "llama3.2:3b"  
 
 
 def load_pdfs(data_dir: str = DATA_DIR) -> List[Tuple[str, str]]:
@@ -134,7 +134,6 @@ def load_vector_index():
 
 
 # ============= LLM via OLLAMA (LOCAL, GRATUIT) =============
-
 def _call_ollama_chat(messages: List[dict]) -> str:
     """
     Appelle le modèle local via Ollama (format style ChatGPT).
@@ -144,17 +143,36 @@ def _call_ollama_chat(messages: List[dict]) -> str:
         "model": OLLAMA_MODEL,
         "messages": messages,
         "stream": False,  # plus simple à gérer que le streaming
+        "options": {
+            "num_predict": 180  # longueur max de la réponse
+        },
     }
-    resp = requests.post(OLLAMA_URL, json=payload, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
+
+    try:
+        # IMPORTANT : timeout pour éviter de rester bloqué 20 minutes
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=300)
+        resp.raise_for_status()
+    except requests.exceptions.Timeout:
+        print("[OLLAMA ERROR] Requête dépassée (timeout).")
+        return "Erreur : le modèle met trop de temps à répondre (timeout)."
+    except requests.exceptions.RequestException as e:
+        print(f"[OLLAMA ERROR] Problème de connexion à Ollama : {e}")
+        return "Erreur : impossible de contacter le modèle via Ollama."
+
+    try:
+        data = resp.json()
+    except ValueError:
+        print("[OLLAMA ERROR] Réponse non-JSON :", resp.text[:500])
+        return "Erreur : Ollama a renvoyé une réponse non valide (non-JSON)."
 
     # Format standard d'Ollama: { "message": { "role": "...", "content": "..." }, ... }
-    if "message" in data and "content" in data["message"]:
+    if isinstance(data, dict) and "message" in data and "content" in data["message"]:
         return data["message"]["content"]
 
     # fallback si jamais la structure change
-    return str(data)
+    print("[OLLAMA ERROR] Format de réponse inattendu :", data)
+    return "Erreur : format de réponse inattendu de la part d’Ollama."
+
 
 
 # ============= RAG simple =============
@@ -162,14 +180,14 @@ def _call_ollama_chat(messages: List[dict]) -> str:
 def rag_query(question: str, k: int = 5) -> str:
     """RAG pipeline: retrieve chunks, call LLM with context, return answer."""
     collection = load_vector_index()
-        # on embed la question avec notre SentenceTransformer
+
+    # Embedding local de la question
     q_emb = embed_texts([question])  # -> liste de 1 vecteur
 
     results = collection.query(
         query_embeddings=q_emb,
         n_results=k
     )
-
 
     docs = results["documents"][0]
     metas = results["metadatas"][0]
@@ -206,12 +224,14 @@ def rag_query_with_history(question: str, history: List[dict], k: int = 5) -> st
     history = list of {"role": "user"/"assistant", "content": "..."}
     """
     collection = load_vector_index()
-        q_emb = embed_texts([question])
+
+    # Embedding local de la question
+    q_emb = embed_texts([question])
+
     results = collection.query(
         query_embeddings=q_emb,
         n_results=k
     )
-
 
     docs = results["documents"][0]
     metas = results["metadatas"][0]
@@ -238,3 +258,26 @@ def rag_query_with_history(question: str, history: List[dict], k: int = 5) -> st
     )
 
     return _call_ollama_chat(messages)
+
+
+# ============= Fonctions utilitaires (résumé & QCM) =============
+
+def rag_summary(question: str = "Summarize this document", k: int = 8) -> str:
+    """Utilise le RAG pour générer un résumé (question générique ou précise)."""
+    return rag_query(question, k)
+
+
+def rag_qcm(question: str, choices: List[str], k: int = 6) -> str:
+    """
+    Mode QCM : on fournit une question et une liste de choix.
+    Retourne le numéro de la bonne réponse (1, 2, 3, ...).
+    """
+    text_choices = "\n".join([f"{i+1}. {c}" for i, c in enumerate(choices)])
+    prompt = f"""Answer this multiple choice question strictly with the correct option number.
+Question: {question}
+
+Choices:
+{text_choices}
+
+Only answer the number, nothing else."""
+    return rag_query(prompt, k)
