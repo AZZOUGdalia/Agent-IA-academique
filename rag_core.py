@@ -1,8 +1,10 @@
-# rag_core.py - version sans OpenAI, avec embeddings locaux + Ollama
+# rag_core.py - Production Version
+# Handles: PDF Loading, Embedding, Database, Ollama Connection, Quiz Generation
 
 import os
 import glob
-from typing import List, Tuple
+import random
+from typing import List, Tuple, Optional, Dict, Any
 
 from pypdf import PdfReader
 import chromadb
@@ -11,46 +13,61 @@ from chromadb.config import Settings
 import requests
 from sentence_transformers import SentenceTransformer
 
-# === Config générale ===
+# === Configuration ===
 DATA_DIR = "data_raw"
 VECTOR_DIR = "vectorstore"
 COLLECTION_NAME = "rl_docs"
 
-# === Config embeddings (gratuit, local) ===
+# === Local Embeddings ===
+# Downloads model automatically to ~/.cache/huggingface
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 _embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-# === Config Ollama (LLM gratuit, local) ===
+# === Local LLM (Ollama) ===
 OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "llama3.2:3b"  
+OLLAMA_MODEL = "llama3.2:3b"
 
+# ---------------------------------------------------------
+# 1. PDF LOADING & INDEXING
+# ---------------------------------------------------------
 
 def load_pdfs(data_dir: str = DATA_DIR) -> List[Tuple[str, str]]:
-    """Load all PDF files and return list of (doc_id, text)."""
+    """Reads all PDF files from the data directory."""
     docs = []
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+        
     pattern = os.path.join(data_dir, "*.pdf")
-    for path in glob.glob(pattern):
+    files = glob.glob(pattern)
+    
+    for path in files:
         name = os.path.splitext(os.path.basename(path))[0]
-        reader = PdfReader(path)
-        text = ""
-        for page in reader.pages:
-            t = page.extract_text()
-            if t:
-                text += t + "\n"
-        if text.strip():
-            docs.append((name, text))
-            print(f"[PDF loaded] {name}")
-        else:
-            print(f"[WARNING] No text extracted from {name}")
+        try:
+            reader = PdfReader(path)
+            text = ""
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+            
+            if text.strip():
+                docs.append((name, text))
+                print(f"[PDF LOADED] {name}")
+            else:
+                print(f"[WARNING] Empty text in {name}")
+                
+        except Exception as e:
+            print(f"[ERROR] Could not read {name}: {e}")
+            
     return docs
 
-
-def simple_chunk(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
-    """Simple character-based chunking."""
+def simple_chunk(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
+    """Splits text into overlapping chunks for better context."""
     text = text.replace("\r", " ").replace("\n", " ")
     chunks = []
     start = 0
     n = len(text)
+    
     while start < n:
         end = min(start + chunk_size, n)
         chunk = text[start:end].strip()
@@ -59,225 +76,194 @@ def simple_chunk(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[
         if end == n:
             break
         start = end - overlap
+        
     return chunks
 
-
-def get_chroma_collection(
-    persist_dir: str = VECTOR_DIR,
-    collection_name: str = COLLECTION_NAME
-):
-    """Create or load a persistent Chroma collection."""
-    client_chroma = chromadb.PersistentClient(
-        path=persist_dir,
+def get_chroma_collection():
+    """Connects to the local vector database."""
+    client = chromadb.PersistentClient(
+        path=VECTOR_DIR,
         settings=Settings(anonymized_telemetry=False)
     )
-    collection = client_chroma.get_or_create_collection(collection_name)
-    return collection
-
-
-# ============= Embeddings (LOCAL, GRATUIT) =============
+    return client.get_or_create_collection(COLLECTION_NAME)
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
-    """
-    Embeddings locaux avec SentenceTransformers.
-    Retourne une liste de vecteurs de floats.
-    """
-    embeddings = _embedder.encode(texts, convert_to_numpy=True)
-    return embeddings.tolist()
-
-
-# ============= Construction de l'index vecteur =============
+    """Converts text lists to vector lists."""
+    return _embedder.encode(texts, convert_to_numpy=True).tolist()
 
 def build_vector_index(docs: List[Tuple[str, str]]):
-    """Build or rebuild the vector index from docs."""
+    """Rebuilds the entire database from scratch."""
     collection = get_chroma_collection()
-
-    # Clear existing data
+    
+    # Clear existing data to avoid duplicates
     try:
         existing = collection.get()
-        ids = existing.get("ids", [])
-        if ids:
-            print(f"[INDEX] Deleting {len(ids)} existing embeddings...")
-            collection.delete(ids=ids)
+        if existing["ids"]:
+            print(f"[INDEX] Deleting {len(existing['ids'])} old entries...")
+            collection.delete(ids=existing["ids"])
     except Exception as e:
-        print(f"[WARN] Could not clear collection: {e}")
+        print(f"[WARN] Could not clean database: {e}")
 
     all_chunks = []
     all_ids = []
-    all_metadatas = []
-
+    all_metas = []
+    
     for doc_id, text in docs:
         chunks = simple_chunk(text)
         for i, chunk in enumerate(chunks):
             cid = f"{doc_id}::chunk_{i}"
-            meta = {"doc_id": doc_id, "chunk_index": i}
             all_chunks.append(chunk)
             all_ids.append(cid)
-            all_metadatas.append(meta)
+            all_metas.append({"doc_id": doc_id})
 
-    print(f"[INDEX] Embedding {len(all_chunks)} chunks...")
-    embeddings = embed_texts(all_chunks)
+    print(f"[INDEX] Embedding {len(all_chunks)} chunks... (This may take a moment)")
+    
+    if all_chunks:
+        embeddings = embed_texts(all_chunks)
+        collection.add(
+            ids=all_ids,
+            documents=all_chunks,
+            metadatas=all_metas,
+            embeddings=embeddings
+        )
+    print("[INDEX] Build Complete.")
 
-    collection.add(
-        ids=all_ids,
-        documents=all_chunks,
-        metadatas=all_metadatas,
-        embeddings=embeddings,
-    )
-    print("[INDEX] Done.")
-    return collection
+# ---------------------------------------------------------
+# 2. OLLAMA CONNECTION (ROBUST)
+# ---------------------------------------------------------
 
-
-def load_vector_index():
-    """Load existing Chroma collection."""
-    return get_chroma_collection()
-
-
-# ============= LLM via OLLAMA (LOCAL, GRATUIT) =============
-def _call_ollama_chat(messages: List[dict]) -> str:
-    """
-    Appelle le modèle local via Ollama (format style ChatGPT).
-    messages = [{"role": "system"/"user"/"assistant", "content": "..."}]
-    """
+def _call_ollama_chat(messages: List[dict], max_tokens: int = 500) -> str:
+    """Sends messages to Ollama with robust error handling."""
     payload = {
         "model": OLLAMA_MODEL,
         "messages": messages,
-        "stream": False,  # plus simple à gérer que le streaming
+        "stream": False,
         "options": {
-            "num_predict": 180  # longueur max de la réponse
-        },
-    }
-
-    try:
-        # IMPORTANT : timeout pour éviter de rester bloqué 20 minutes
-        resp = requests.post(OLLAMA_URL, json=payload, timeout=300)
-        resp.raise_for_status()
-    except requests.exceptions.Timeout:
-        print("[OLLAMA ERROR] Requête dépassée (timeout).")
-        return "Erreur : le modèle met trop de temps à répondre (timeout)."
-    except requests.exceptions.RequestException as e:
-        print(f"[OLLAMA ERROR] Problème de connexion à Ollama : {e}")
-        return "Erreur : impossible de contacter le modèle via Ollama."
-
-    try:
-        data = resp.json()
-    except ValueError:
-        print("[OLLAMA ERROR] Réponse non-JSON :", resp.text[:500])
-        return "Erreur : Ollama a renvoyé une réponse non valide (non-JSON)."
-
-    # Format standard d'Ollama: { "message": { "role": "...", "content": "..." }, ... }
-    if isinstance(data, dict) and "message" in data and "content" in data["message"]:
-        return data["message"]["content"]
-
-    # fallback si jamais la structure change
-    print("[OLLAMA ERROR] Format de réponse inattendu :", data)
-    return "Erreur : format de réponse inattendu de la part d’Ollama."
-
-
-
-# ============= RAG simple =============
-
-def rag_query(question: str, k: int = 5) -> str:
-    """RAG pipeline: retrieve chunks, call LLM with context, return answer."""
-    collection = load_vector_index()
-
-    # Embedding local de la question
-    q_emb = embed_texts([question])  # -> liste de 1 vecteur
-
-    results = collection.query(
-        query_embeddings=q_emb,
-        n_results=k
-    )
-
-    docs = results["documents"][0]
-    metas = results["metadatas"][0]
-
-    context_blocks = []
-    for doc, meta in zip(docs, metas):
-        context_blocks.append(f"[{meta['doc_id']}] {doc}")
-
-    context = "\n\n".join(context_blocks)
-
-    system_prompt = (
-        "You are an academic assistant specialized in Reinforcement Learning and Machine Learning. "
-        "You answer in clear, structured English. "
-        "Use only the information from the provided context. If something is not in the context, say you don't know."
-    )
-
-    user_prompt = (
-        f"Context (excerpts from RL/ML lecture notes):\n{context}\n\n"
-        f"Question: {question}\n\n"
-        "Answer in English. If you need equations, describe them in plain text."
-    )
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-
-    return _call_ollama_chat(messages)
-
-
-def rag_query_with_history(question: str, history: List[dict], k: int = 5) -> str:
-    """
-    Same as rag_query but with chat history.
-    history = list of {"role": "user"/"assistant", "content": "..."}
-    """
-    collection = load_vector_index()
-
-    # Embedding local de la question
-    q_emb = embed_texts([question])
-
-    results = collection.query(
-        query_embeddings=q_emb,
-        n_results=k
-    )
-
-    docs = results["documents"][0]
-    metas = results["metadatas"][0]
-
-    context_blocks = []
-    for doc, meta in zip(docs, metas):
-        context_blocks.append(f"[{meta['doc_id']}] {doc}")
-
-    context = "\n\n".join(context_blocks)
-
-    system_prompt = (
-        "You are an academic assistant specialized in Reinforcement Learning and Machine Learning. "
-        "You answer in clear, structured English. "
-        "Use only the information from the provided context. If something is not in the context, say you don't know."
-    )
-
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
-    messages.append(
-        {
-            "role": "user",
-            "content": f"Context:\n{context}\n\nQuestion: {question}"
+            "num_predict": max_tokens,
+            "temperature": 0.3 
         }
+    }
+    
+    try:
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["message"]["content"]
+        
+    except requests.exceptions.Timeout:
+        return "Error: Ollama timed out. The model is taking too long to reply."
+    except requests.exceptions.ConnectionError:
+        return "Error: Could not connect to Ollama. Is 'ollama serve' running?"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# ---------------------------------------------------------
+# 3. RAG QUERY LOGIC
+# ---------------------------------------------------------
+
+def rag_query_with_history(question: str, history: List[dict], k: int = 5) -> Tuple[str, List[str]]:
+    """
+    Main RAG function. 
+    Returns: (Answer String, List of Source Filenames)
+    """
+    collection = get_chroma_collection()
+    q_emb = embed_texts([question])
+    
+    # 1. Retrieve relevant chunks
+    results = collection.query(query_embeddings=q_emb, n_results=k)
+    
+    if not results["documents"] or not results["documents"][0]:
+        return "I could not find any relevant information in your PDFs.", []
+
+    docs = results["documents"][0]
+    metas = results["metadatas"][0]
+    
+    # 2. Extract unique sources
+    sources = list(set([m['doc_id'] for m in metas]))
+
+    # 3. Prepare Context
+    context_text = "\n\n".join([f"[{m['doc_id']}] {d}" for d, m in zip(docs, metas)])
+    
+    # 4. Construct Prompt
+    system_prompt = (
+        "You are a university teaching assistant. "
+        "Answer the question strictly based on the Context provided below. "
+        "If the answer is not in the context, state that you do not know. "
+        "Cite the document names if possible."
     )
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(history) # Append previous conversation
+    messages.append({
+        "role": "user", 
+        "content": f"Context:\n{context_text}\n\nQuestion: {question}"
+    })
+    
+    # 5. Generate Answer
+    answer = _call_ollama_chat(messages)
+    return answer, sources
 
-    return _call_ollama_chat(messages)
+# --- Wrapper for Backward Compatibility ---
+def rag_query(question: str) -> str:
+    """Legacy function that returns just the answer string."""
+    answer, _ = rag_query_with_history(question, [])
+    return answer
 
+# ---------------------------------------------------------
+# 4. NEW FEATURES (QUIZ)
+# ---------------------------------------------------------
 
-# ============= Fonctions utilitaires (résumé & QCM) =============
-
-def rag_summary(question: str = "Summarize this document", k: int = 8) -> str:
-    """Utilise le RAG pour générer un résumé (question générique ou précise)."""
-    return rag_query(question, k)
-
-
-def rag_qcm(question: str, choices: List[str], k: int = 6) -> str:
+def generate_quiz_question() -> Dict[str, Any]:
     """
-    Mode QCM : on fournit une question et une liste de choix.
-    Retourne le numéro de la bonne réponse (1, 2, 3, ...).
+    Generates a multiple choice question and parses it into a dictionary.
+    Returns: {'question': str, 'options': List[str], 'correct_answer': str}
     """
-    text_choices = "\n".join([f"{i+1}. {c}" for i, c in enumerate(choices)])
-    prompt = f"""Answer this multiple choice question strictly with the correct option number.
-Question: {question}
+    collection = get_chroma_collection()
+    existing = collection.get()
+    
+    if not existing["documents"]:
+        return {"error": "No documents found. Please upload PDFs first."}
 
-Choices:
-{text_choices}
+    # Pick 3 random chunks
+    num_docs = len(existing["documents"])
+    indices = random.sample(range(num_docs), min(3, num_docs))
+    context = "\n".join([existing["documents"][i] for i in indices])
 
-Only answer the number, nothing else."""
-    return rag_query(prompt, k)
+    # Strict prompt to ensure parsable output
+    prompt = (
+        "Based on the following context, generate a single multiple-choice question.\n"
+        "Follow this EXACT format:\n"
+        "Question: [The question text]\n"
+        "Option A: [First option]\n"
+        "Option B: [Second option]\n"
+        "Option C: [Third option]\n"
+        "Option D: [Fourth option]\n"
+        "Answer: [Just the letter A, B, C, or D]\n\n"
+        f"Context:\n{context}"
+    )
+    
+    raw_text = _call_ollama_chat([{"role": "user", "content": prompt}])
+    
+    # Parse the response
+    parsed = {"question": "", "options": [], "correct_answer": ""}
+    lines = raw_text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith("Question:"):
+            parsed["question"] = line.replace("Question:", "").strip()
+        elif line.startswith("Option"):
+            # Keeps "Option A: Text" format for display
+            parsed["options"].append(line)
+        elif line.startswith("Answer:"):
+            parsed["correct_answer"] = line.replace("Answer:", "").strip().upper()
+            # Clean up if it says "Answer: Option A" -> "A"
+            if "OPTION" in parsed["correct_answer"]:
+                 parsed["correct_answer"] = parsed["correct_answer"].replace("OPTION", "").strip()
+    
+    # Fallback if parsing failed but we got text
+    if not parsed["question"]:
+        parsed["question"] = raw_text
+        parsed["error_parsing"] = True
+        
+    return parsed
