@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <title>Architecture Agent IA Académique</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reset.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/theme/night.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/atom-one-dark.min.css">
+    
+    <style>
+        /* --- Styles Personnalisés --- */
+        
+        /* Annotations de code */
+        .code-annotation { font-size: 0.6em; color: #a6e22e; font-style: italic; }
+        
+        /* Listes techniques avec puces stylisées */
+        .tech-list { font-size: 0.6em; text-align: left; margin-top: 15px; background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; }
+        .tech-list li { margin-bottom: 8px; list-style-type: none; }
+        .tech-list li strong { color: #f92672; }
+        .tech-list li::before { content: "👉 "; color: #61dafb; }
+
+        /* Slide Image (Split) */
+        .split-container { display: flex; align-items: center; gap: 30px; justify-content: center; }
+        .split-image { flex: 1; }
+        .split-image img { border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.5); border: 2px solid #61dafb; max-height: 500px; }
+        .split-text { flex: 1; text-align: left; }
+
+        /* Slide Schéma Bloc (Slide 6) */
+        .arch-container { display: flex; flex-direction: column; align-items: center; gap: 15px; margin-top: 20px; }
+        .arch-row { display: flex; gap: 20px; justify-content: center; width: 100%; }
+        .arch-box { 
+            padding: 15px; border-radius: 10px; font-size: 0.6em; font-weight: bold; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); border: 2px solid rgba(255,255,255,0.2);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        .arch-box span { font-size: 0.7em; font-weight: normal; opacity: 0.8; margin-top: 5px; }
+        
+        /* Couleurs des blocs */
+        .box-interface { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); width: 25%; } /* Bleu */
+        .box-core { background: linear-gradient(135deg, #8E2DE2 0%, #4A00E0 100%); width: 60%; padding: 20px; font-size: 0.8em; border: 2px solid #bd93f9; } /* Violet */
+        .box-data { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); width: 30%; color: #000; } /* Vert */
+        
+        .arrow-down { font-size: 1.2em; color: rgba(255,255,255,0.5); margin: 5px 0; }
+    </style>
+</head>
+<body>
+    <div class="reveal">
+        <div class="slides">
+
+            <section>
+                <h1>Agent IA Académique</h1>
+                <h4 style="color: #61dafb;">RAG Local & Privé pour Étudiants</h4>
+                <p><small>Ollama | ChromaDB | Python | Streamlit</small></p>
+            </section>
+
+            <section>
+                <h2>Plan de la présentation</h2>
+                <ol style="font-size: 0.8em; line-height: 1.8;">
+                    <li><strong>Le Concept :</strong> Pourquoi un RAG local ?</li>
+                    <li><strong>Architecture Globale :</strong> Le flux de données.</li>
+                    <li><strong>La Structure :</strong> Organisation des fichiers.</li>
+                    <li><strong>Le Cœur (Backend) :</strong> Analyse de <code>rag_core.py</code>.</li>
+                    <li><strong>L'Initialisation :</strong> Le rôle de <code>build_index.py</code>.</li>
+                    <li><strong>Les Interfaces :</strong> Web (<code>streamlit</code>) & API.</li>
+                    <li><strong>Démonstration & Conclusion</strong>.</li>
+                </ol>
+            </section>
+
+            <section>
+                <h3>Le Concept</h3>
+                <div style="display: flex; gap: 20px; margin-top: 30px;">
+                    <div style="flex: 1; background: rgba(255,0,0,0.1); padding: 20px; border-radius: 10px;">
+                        <h5>🔴 Le Défi</h5>
+                        <ul style="font-size: 0.6em;">
+                            <li>Cours éparpillés (PDFs multiples).</li>
+                            <li>Recherche "Ctrl+F" inefficace.</li>
+                            <li>Données confidentielles (pas de Cloud).</li>
+                        </ul>
+                    </div>
+                    <div style="flex: 1; background: rgba(0,255,0,0.1); padding: 20px; border-radius: 10px;">
+                        <h5>🟢 La Solution</h5>
+                        <ul style="font-size: 0.6em;">
+                            <li>Moteur de recherche sémantique.</li>
+                            <li>Réponses générées et sourcées.</li>
+                            <li>100% Offline (Ollama + Chroma).</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <h3>Architecture Technique</h3>
+                <div class="mermaid">
+                    graph LR
+                    Files[PDFs] -->|Transformation| Vector[(Base ChromaDB)]
+                    User -->|Question| Core[rag_core]
+                    Core -->|Recherche| Vector
+                    Core -->|Contexte| Ollama[Llama 3.2]
+                </div>
+                <div class="tech-list">
+                    <ul>
+                        <li><strong>Transformation :</strong> Le PDF devient une liste de nombres (vecteurs).</li>
+                        <li><strong>Stockage Local :</strong> Dossier <code>vectorstore/</code> (disque dur).</li>
+                        <li><strong>Rapidité :</strong> Tout s'exécute sur le processeur (CPU).</li>
+                        <li><strong>Indépendance :</strong> Fonctionne sans Internet (Mode Avion).</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section>
+                <h3>Aperçu du Projet
+                
+              <div class="split-container">
+                    <div class="split-image">
+                        <img src="https://github.com/AZZOUGdalia/Agent-IA-academique/raw/refs/heads/main/de9322ce-b4af-4669-88ad-238bcebd9c62.jpeg" 
+                             
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <h3>La Logique des Fichiers</h3>
+                <p style="font-size: 0.6em; margin-bottom: 10px;">Comment les scripts communiquent entre eux.</p>
+                
+                <div class="arch-container">
+                    <div class="arch-row">
+                        <div class="arch-box box-interface">
+                            rag_streamlit.py
+                            <span>🖥️ Site Web</span>
+                        </div>
+                        <div class="arch-box box-interface">
+                            rag_API.py
+                            <span>🌐 Serveur API</span>
+                        </div>
+                        <div class="arch-box box-interface">
+                            rag_cli.py
+                            <span>⌨️ Terminal</span>
+                        </div>
+                    </div>
+
+                    <div class="arrow-down">⬇️ Appellent ⬇️</div>
+
+                    <div class="arch-row">
+                        <div class="arch-box box-core">
+                            🧠 rag_core.py
+                            <span>(Le Cerveau : Ollama + Logique RAG)</span>
+                        </div>
+                    </div>
+
+                    <div class="arrow-down">⬆️ Lit & Écrit ⬇️</div>
+
+                    <div class="arch-row">
+                        <div class="arch-box box-data">
+                            build_index.py
+                            <span>(Initialisation)</span>
+                        </div>
+                        <div class="arch-box box-data">
+                            📁 vectorstore/
+                            <span>(ChromaDB)</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <h3>1. Le Cerveau : <code>rag_core.py</code></h3>
+                <pre><code class="python" data-trim data-line-numbers="78-85">
+# La fonction query_rag
+results = collection.query(
+    query_texts=[question],
+    n_results=3 # On garde 3 résultats
+)
+
+# Injection du contexte dans le prompt
+prompt = f"Use this context: {context}. Answer: {question}"
+response = ollama.chat(model="llama3.2:3b", messages=...)
+                </code></pre>
+                <div class="tech-list">
+                    <ul>
+                        <li><strong>Recherche :</strong> Trouve les 3 slides les plus pertinents.</li>
+                        <li><strong>Filtrage :</strong> Élimine le reste du cours pour ne pas perdre l'IA.</li>
+                        <li><strong>Consigne (Prompt) :</strong> Interdit d'inventer, obligation d'utiliser le texte fourni.</li>
+                        <li><strong>Connexion :</strong> Envoie le tout à Ollama (Llama 3.2).</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section>
+                <h3>2. L'Initialisation : <code>build_index.py</code></h3>
+                <pre><code class="python" data-trim data-line-numbers="9-14">
+# Lancement automatique
+if not os.path.exists(DATA_PATH):
+    os.makedirs(DATA_PATH)
+
+# Chargement des données
+chunks = load_pdfs(DATA_PATH)
+build_vector_index(chunks)
+                </code></pre>
+                <div class="tech-list">
+                    <ul>
+                        <li><strong>Automatisation :</strong> Crée les dossiers manquants tout seul.</li>
+                        <li><strong>Lecture :</strong> Extrait le texte brut des PDF (pypdf).</li>
+                        <li><strong>Découpage :</strong> 1 Page de PDF = 1 Morceau de connaissance.</li>
+                        <li><strong>Encodage :</strong> Convertit le texte en mathématiques pour la base.</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section>
+                <h3>3. L'Interface : <code>rag_streamlit.py</code></h3>
+                <pre><code class="python" data-trim data-line-numbers="57-64">
+# Boucle principale
+if prompt := st.chat_input("Posez votre question..."):
+    # Appel au cerveau
+    response = query_rag(prompt, history)
+    
+    # Affichage
+    st.markdown(response["answer"])
+    st.caption(f"Sources: {response['sources']}")
+                </code></pre>
+                <div class="tech-list">
+                    <ul>
+                        <li><strong>Interactivité :</strong> Zone de saisie type "ChatGPT".</li>
+                        <li><strong>Mémoire :</strong> Se souvient des questions précédentes.</li>
+                        <li><strong>Transparence :</strong> Affiche le nom du fichier source.</li>
+                        <li><strong>Fluidité :</strong> Met à jour l'écran sans recharger la page.</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section>
+                <h3>4. Ouverture : <code>rag_API.py</code></h3>
+                <pre><code class="python" data-trim data-line-numbers="11-19">
+# Validation stricte des données
+class ChatRequest(BaseModel):
+    question: str
+    history: Optional[List[dict]] = []
+
+# Point d'accès Web
+@app.post("/chat")
+def chat_endpoint(request: ChatRequest):
+    return query_rag(request.question, request.history)
+                </code></pre>
+                <div class="tech-list">
+                    <ul>
+                        <li><strong>Porte d'entrée :</strong> Crée une adresse Web pour parler à l'IA.</li>
+                        <li><strong>Contrôle :</strong> Vérifie le format des questions (Sécurité).</li>
+                        <li><strong>Universel :</strong> Permet de créer une future application mobile.</li>
+                        <li><strong>Standard :</strong> Utilise la technologie FastAPI.</li>
+                    </ul>
+                </div>
+            </section>
+
+            <section>
+                <h2>Conclusion</h2>
+                <ul>
+                    <li>✅ <strong>Opérationnel :</strong> Pipeline complet du PDF au Chat.</li>
+                    <li>🔒 <strong>Sécurisé :</strong> Aucune donnée ne fuite.</li>
+                    <li>🎓 <strong>Pédagogique :</strong> Citations précises et mode Quiz.</li>
+
+<li>❌
+<strong>Limites :</strong> Le GPU peut ne pas être suffisamment puissant.</li>
+                </ul>
+    
+            </section>
+
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/highlight/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script>
+        Reveal.initialize({
+            hash: true,
+            slideNumber: true,
+            plugins: [ RevealHighlight ]
+        });
+        mermaid.initialize({ startOnLoad: true, theme: 'dark' });
+    </script>
+</body>
+</html>
