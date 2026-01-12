@@ -1,3 +1,8 @@
+MATT Lucie 
+AZZOUG Dalia 
+Jeancy Candela Nisharize 
+RUSTAMLI Sayqin 
+
 # Agent-IA-academique
 
 **Local, privacy-first RAG for students and researchers.** Upload PDFs, index them with Chroma, and query a local Ollama model through GUI, CLI, or REST API while keeping every document on your machine.
